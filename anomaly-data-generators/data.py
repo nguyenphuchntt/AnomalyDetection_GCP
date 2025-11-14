@@ -1,7 +1,6 @@
 import os
 import csv
-import uuid  # <-- Thêm lại thư viện uuid
-import itertools
+import uuid
 from flask import Flask, Response
 from google.cloud import pubsub_v1
 app = Flask(__name__)
@@ -10,7 +9,7 @@ credentials_path = os.path.join("/home/tien/Project/pubsubkey.json")
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = credentials_path
 
 publisher = pubsub_v1.PublisherClient()
-topic_path = 'projects/int3all319-477808/topics/anomaly-data-receiver'
+topic_path = 'projects/int3319-477808/topics/anomaly-data-receiver'
 
 
 def generate_data():
@@ -48,7 +47,7 @@ def generate_data():
                     
                     row_count += 1
 
-                    if row_count % 1000 == 0:
+                    if row_count % 5000 == 0:
                         yield f"Data: Đã publish {row_count} dòng (Last ID: {message_id})\n\n"
                 
                 except Exception as e:

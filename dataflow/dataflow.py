@@ -5,7 +5,6 @@ from apache_beam.io.gcp.pubsub import ReadFromPubSub
 from apache_beam.io.gcp.bigquery import WriteToBigQuery
 from apache_beam.transforms.window import FixedWindows
 import logging
-import json
 
 credentials_path = "/home/tien/Project/dataflowkey.json"
 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = credentials_path
@@ -37,13 +36,16 @@ class ProcessCSVToBQ(beam.DoFn):
         if len(values) != 32:
             logging.warning(f"Dữ liệu lỗi hoặc thiếu cột: {len(values)} cột. Raw: {decoded_str}")
             return
+        
+        class_val = values[31].strip()
+        final_class = int(class_val) if class_val else None
 
         try:
             row = {
                 'transaction_id': values[0].replace('"', ''),
                 'Time': int(values[1]),
                 'Amount': float(values[30]),
-                'Class': int(values[31])
+                'Class': final_class
             }
 
             for i in range(1, 29):
