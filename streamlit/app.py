@@ -171,9 +171,9 @@ with tab1:
             st.subheader("Select a transaction to review:")
             
             # Select important columns for display
-            display_cols = ['transaction_id', 'prediction_result', 'checked']
+            display_cols = ['transaction_id', 'prediction_result']
             # Add other feature columns if they exist
-            other_cols = [col for col in df_frauds.columns if col not in display_cols]
+            other_cols = [col for col in df_frauds.columns if col not in display_cols and col != 'checked']
             display_df = df_frauds[display_cols + other_cols]
             
             selected_event = st.dataframe(
