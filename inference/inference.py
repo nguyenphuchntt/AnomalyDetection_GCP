@@ -28,9 +28,13 @@ executor = ThreadPoolExecutor(max_workers=5)
 scaler, scaler_time, scaler_amount, model = None, None, None, None
 model_lock = threading.Lock()
 
+storage_client = storage.Client()
+aiplatform.init(project=PROJECT_ID, location=REGION)
+subscriber = pubsub_v1.SubscriberClient()
+publisher = pubsub_v1.PublisherClient()
+
 def download_blob(bucket_name, source_blob_path, destination_file_path):
     print(f"Downloading: gs://{bucket_name}/{source_blob_path}...")
-    storage_client = storage.Client()
     bucket = storage_client.get_bucket(bucket_name)
     blob = bucket.blob(source_blob_path)
     blob.download_to_filename(destination_file_path)
@@ -38,7 +42,6 @@ def download_blob(bucket_name, source_blob_path, destination_file_path):
 
 def fetch_and_download_latest_model():
     print("Fetching and downloading latest model...")
-    aiplatform.init(project=PROJECT_ID, location=REGION)
     try:
         model_list = aiplatform.Model.list(
             filter=f'display_name="{MODEL_REGISTRY_NAME}"',
@@ -122,9 +125,8 @@ def preprocessing_and_predict(data_df):
 
 def publish_message(result_df):
     print("Publishing message...")
-    publisher = pubsub_v1.PublisherClient()
-    topic_path = publisher.topic_path(PROJECT_ID, TOPIC_ID)
 
+    topic_path = publisher.topic_path(PROJECT_ID, TOPIC_ID)
 
     for row in result_df.itertuples(index=False):
         message_data = {
@@ -182,7 +184,6 @@ def main():
     except Exception as e:
         print(f"Warning: Could not pre-load model: {e}")
 
-    subscriber = pubsub_v1.SubscriberClient()
     subscription_path = subscriber.subscription_path(PROJECT_ID, SUBSCRIPTION_ID)
 
     flow_control = pubsub_v1.types.FlowControl(
