@@ -1,122 +1,72 @@
-import csv
 import uuid
 import os
 import traceback
 from flask import Flask, request
-from google.cloud import pubsub_v1, storage
+from google.cloud import pubsub_v1
 
 app = Flask(__name__)
 
 PROJECT_ID = "int3319-477808"
 TOPIC_NAME = "anomaly-data-receiver"
-BUCKET_NAME = "raw-infer-data"
-CSV_FILE_PATH = "creditcard.csv"
-STATE_FILE_PATH = "state/row_index.txt"
-ROWS_PER_RUN = 2
 
 try:
     publisher = pubsub_v1.PublisherClient()
-    storage_client = storage.Client()
     topic_path = publisher.topic_path(PROJECT_ID, TOPIC_NAME)
-    bucket = storage_client.bucket(BUCKET_NAME)
 except Exception as e:
-    print(f"LỖI NGHIÊM TRỌNG khi khởi tạo client: {e}")
+    print(f"LỖI khi khởi tạo client Pub/Sub: {e}")
     traceback.print_exc()
 
-def get_state():
-    """Lấy chỉ số dòng đã xử lý lần cuối từ GCS."""
-    try:
-        blob = bucket.blob(STATE_FILE_PATH)
-        index_str = blob.download_as_string().decode('utf-8')
-        return int(index_str)
-    except Exception:
-        print("Không tìm thấy file trạng thái, bắt đầu từ 0.")
-        return 0
-
-def set_state(index):
-    """Lưu chỉ số dòng mới nhất vào GCS."""
-    try:
-        blob = bucket.blob(STATE_FILE_PATH)
-        blob.upload_from_string(str(index).encode('utf-8'))
-        print(f"Đã cập nhật trạng thái mới: {index}")
-    except Exception as e:
-        print(f"LỖI: Không thể cập nhật trạng thái: {e}")
-
-def process_and_publish_rows():
-    """
-    Đọc CSV từ GCS, publish 2 dòng, và cập nhật trạng thái.
-    """
-    current_index = get_state()
-    print(f"Bắt đầu xử lý từ dòng index: {current_index}")
-
-    csv_blob = bucket.blob(CSV_FILE_PATH)
-    if not csv_blob.exists():
-        print(f"LỖI: Không tìm thấy file {CSV_FILE_PATH} trong bucket {BUCKET_NAME}.")
-        return "Lỗi: Không tìm thấy file CSV", 500
+def process_and_publish_data(incoming_data):
+    if not isinstance(incoming_data, list):
+        return "Lỗi: Dữ liệu đầu vào phải là một JSON array", 400
 
     rows_published = 0
-    new_index = current_index
+    errors_count = 0
 
-    try:
-        with csv_blob.open("r", encoding="utf-8") as csv_file:
-            csv_reader = csv.reader(csv_file)
+    for row in incoming_data:
+        if not isinstance(row, list):
+            print(f"Lỗi: Mục dữ liệu không phải là danh sách, bỏ qua: {row}")
+            errors_count += 1
+            continue
+        
+        try:
+            transaction_id = str(uuid.uuid4())
+            new_row_list = [f'"{transaction_id}"'] + row_str
+            new_row_string = ",".join(new_row_list)
+            data = new_row_string.encode("utf-8")
+            
+            future = publisher.publish(topic_path, data=data)
+            message_id = future.result()
 
-            try:
-                next(csv_reader)
-            except StopIteration:
-                print("LỖI: File CSV rỗng.")
-                return "Lỗi: File CSV rỗng", 500
+            print(f"Đã publish message (ID: {message_id})")
+            rows_published += 1
 
-            for _ in range(current_index):
-                next(csv_reader)
+        except Exception as e:
+            print(f"Lỗi khi xử lý hoặc publish dòng: {str(e)}")
+            traceback.print_exc()
+            errors_count += 1
 
-            for row in csv_reader:
-                if rows_published >= ROWS_PER_RUN:
-                    break
-
-                try:
-                    if len(row) > 30:
-                        row[30] = ""
-                    else:
-                        continue
-
-                    transaction_id = str(uuid.uuid4())
-                    new_row_list = [f'"{transaction_id}"'] + row
-                    new_row_string = ",".join(new_row_list)
-                    data = new_row_string.encode("utf-8")
-
-                    future = publisher.publish(topic_path, data=data)
-                    message_id = future.result()
-
-                    print(f"Đã publish dòng {new_index + 1} (ID: {message_id})")
-                    rows_published += 1
-                    new_index += 1
-
-                except Exception as e:
-                    print(f"Lỗi khi publish dòng {new_index + 1}: {str(e)}")
-                    new_index += 1
-
-    except StopIteration:
-        print("Đã đọc hết file CSV. Reset index về 0 cho lần chạy sau.")
-        new_index = 0
-    
-    except Exception as e:
-        print(f"Lỗi nghiêm trọng khi đọc stream CSV: {str(e)}")
-        traceback.print_exc()
-        set_state(new_index)
-        return f"Lỗi: {str(e)}", 500
-
-    set_state(new_index)
-    result_message = f"Hoàn tất. Đã publish {rows_published} dòng. Index mới: {new_index}"
+    result_message = f"Hoàn tất xử lý request. Đã publish: {rows_published} dòng. Lỗi: {errors_count} dòng."
     print(result_message)
+
     return result_message, 200
 
-@app.route("/", methods=["POST", "GET"])
+@app.route("/", methods=["POST"])
 def run_job():
+    """
+    Entry point của Flask app.
+    Nhận dữ liệu JSON từ POST request và xử lý.
+    """
     try:
-        return process_and_publish_rows()
+        incoming_data = request.json
+        
+        if not incoming_data:
+            return "Lỗi: Không tìm thấy nội dung JSON trong request body.", 400
+
+        return process_and_publish_data(incoming_data)
+
     except Exception as e:
-        print(f"LỖI TOÀN CỤC: {e}")
+        print(f"LỖI TOÀN CỤC khi xử lý request: {e}")
         traceback.print_exc()
         return "Lỗi máy chủ nội bộ", 500
 
