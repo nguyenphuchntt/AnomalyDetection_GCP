@@ -3,6 +3,7 @@ import base64
 import json
 import functions_framework
 from google.cloud import bigquery 
+import datetime 
 
 BIGQUERY_DATASET = 'fraud_dashboard_data'
 BIGQUERY_TABLE = 'history_db'
@@ -41,6 +42,7 @@ def main_handler(cloud_event):
         amount = data["amount"]
         time = data["time"]
         actual_result = get_actual_result(prediction_result)
+        timestamp_now = datetime.datetime.now(datetime.UTC).isoformat() 
         
         QUERY = """
             MERGE INTO `int3319-477808.fraud_dashboard_data.history_db` AS T
@@ -51,21 +53,25 @@ def main_handler(cloud_event):
                     @prediction_result AS prediction_result,
                     @actual_result AS actual_result,
                     @amount AS amount,
-                    @time AS time
+                    @time AS time,
+                    @timestamp_now AS timestamp_processed -- Thêm trường mới
             ) AS S
             ON T.transaction_id = S.transaction_id
             
             WHEN MATCHED THEN
+                -- Nếu ID đã tồn tại, CẬP NHẬT các trường
                 UPDATE SET
                     prediction_score = S.prediction_score,
                     prediction_result = S.prediction_result,
                     actual_result = S.actual_result,
                     amount = S.amount,
-                    time = S.time
+                    time = S.time,
+                    timestamp_processed = S.timestamp_processed -- Cập nhật timestamp
                     
             WHEN NOT MATCHED THEN
-                INSERT (transaction_id, prediction_score, prediction_result, actual_result, amount, time)
-                VALUES (S.transaction_id, S.prediction_score, S.prediction_result, S.actual_result, S.amount, S.time)
+                -- Nếu ID chưa tồn tại, CHÈN bản ghi mới
+                INSERT (transaction_id, prediction_score, prediction_result, actual_result, amount, time, timestamp_processed)
+                VALUES (S.transaction_id, S.prediction_score, S.prediction_result, S.actual_result, S.amount, S.time, S.timestamp_processed)
         """
         
         job_config = bigquery.QueryJobConfig(
@@ -76,6 +82,7 @@ def main_handler(cloud_event):
                 bigquery.ScalarQueryParameter("actual_result", "INT64", actual_result), 
                 bigquery.ScalarQueryParameter("amount", "FLOAT64", amount),
                 bigquery.ScalarQueryParameter("time", "INT64", time),
+                bigquery.ScalarQueryParameter("timestamp_now", "TIMESTAMP", timestamp_now),
             ]
         )
 
