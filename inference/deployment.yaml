@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inference
+  template:
+    metadata:
+      labels:
+        app: inference
+    spec:
+      containers:
+      - name: inference
+        image:  gcr.io/int3319-477808/inference:v1
+        imagePullPolicy: Always
+        resources:
+          requests:
+            cpu: 500m
+            memory: "512Mi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+      serviceAccountName: inference-pod-sa
+
+
