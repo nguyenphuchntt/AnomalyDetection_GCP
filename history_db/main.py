@@ -35,35 +35,56 @@ def main_handler(cloud_event):
         return 
 
     try:
-        transaction_id_value = data["id"]
-        prediction_result_value = data["failure"]
-        failure_flag = data["failure"]
-        prediction_score_value = data["prediction_score"]
-        amount_value = data["amount"]
-        time_value = data["time"]
+        transaction_id = data["id"]
+        prediction_result = data["failure"]
+        prediction_score = data["prediction_score"]
+        amount = data["amount"]
+        time = data["time"]
+        actual_result = get_actual_result(prediction_result)
         
-        actual_result_value = get_actual_result(failure_flag)
+        QUERY = """
+            MERGE INTO `int3319-477808.fraud_dashboard_data.history_db` AS T
+            USING (
+                SELECT
+                    @transaction_id AS transaction_id,
+                    @prediction_score AS prediction_score,
+                    @prediction_result AS prediction_result,
+                    @actual_result AS actual_result,
+                    @amount AS amount,
+                    @time AS time
+            ) AS S
+            ON T.transaction_id = S.transaction_id
+            
+            WHEN MATCHED THEN
+                UPDATE SET
+                    prediction_score = S.prediction_score,
+                    prediction_result = S.prediction_result,
+                    actual_result = S.actual_result,
+                    amount = S.amount,
+                    time = S.time
+                    
+            WHEN NOT MATCHED THEN
+                INSERT (transaction_id, prediction_score, prediction_result, actual_result, amount, time)
+                VALUES (S.transaction_id, S.prediction_score, S.prediction_result, S.actual_result, S.amount, S.time)
+        """
         
-        rows_to_insert = [{
-            "transaction_id": transaction_id_value,
-            "prediction_score": prediction_score_value,
-            "prediction_result": prediction_result_value,
-            "actual_result": actual_result_value,
-            "amount": amount_value,
-            "time": time_value
-        }]
-        
-        table_ref = bigquery_client.dataset(BIGQUERY_DATASET).table(BIGQUERY_TABLE)
-        
-        errors = bigquery_client.insert_rows_json(table_ref, rows_to_insert)
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("transaction_id", "STRING", transaction_id),
+                bigquery.ScalarQueryParameter("prediction_score", "FLOAT64", prediction_score),
+                bigquery.ScalarQueryParameter("prediction_result", "INT64", prediction_result),
+                bigquery.ScalarQueryParameter("actual_result", "INT64", actual_result), 
+                bigquery.ScalarQueryParameter("amount", "FLOAT64", amount),
+                bigquery.ScalarQueryParameter("time", "INT64", time),
+            ]
+        )
 
-        if errors:
-            print("Errors encountered while inserting rows:")
-            print(errors)
-        else:
-            print(f"Successfully inserted record for Transaction ID: {data['id']}.")
+        query_job = bigquery_client.query(QUERY, job_config=job_config)
+        query_job.result() 
+
+        print(f"Successfully MERGED record for Transaction ID: {transaction_id}.")
             
     except Exception as e:
-        print(f"An error occurred during BigQuery insertion: {e}")
+        print(f"An error occurred during BigQuery MERGE: {e}")
         
     return
