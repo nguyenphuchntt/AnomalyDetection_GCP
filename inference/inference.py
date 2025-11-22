@@ -2,6 +2,7 @@ import io
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import os
 
 from google.cloud import storage
 from google.cloud import aiplatform
@@ -23,7 +24,10 @@ MODEL_FILE_NAME = "model.joblib"
 DESTINATION_SCALER_PATH = "scalers.joblib"
 DESTINATION_MODEL_PATH = "model.joblib"
 
-executor = ThreadPoolExecutor(max_workers=5)
+MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '20'))
+MAX_MESSAGES = int(os.environ.get('MAX_MESSAGES', '40'))
+
+executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
 scaler, scaler_time, scaler_amount, model = None, None, None, None
 model_lock = threading.Lock()
@@ -33,12 +37,14 @@ aiplatform.init(project=PROJECT_ID, location=REGION)
 subscriber = pubsub_v1.SubscriberClient()
 publisher = pubsub_v1.PublisherClient()
 
+
 def download_blob(bucket_name, source_blob_path, destination_file_path):
     print(f"Downloading: gs://{bucket_name}/{source_blob_path}...")
     bucket = storage_client.get_bucket(bucket_name)
     blob = bucket.blob(source_blob_path)
     blob.download_to_filename(destination_file_path)
     print("Storage object {} downloaded to {}.".format(source_blob_path, destination_file_path))
+
 
 def fetch_and_download_latest_model():
     print("Fetching and downloading latest model...")
@@ -85,30 +91,32 @@ def load_model_if_needed():
             model = joblib.load(DESTINATION_MODEL_PATH)
             print("XGBClassifier loaded")
 
+
 def parse_message_to_dataframe(message_data):
     try:
         column_names = ['transaction_id', 'Time'] + [f'V{i}' for i in range(1, 29)] + ['Amount', 'Class']
         df = pd.read_csv(io.StringIO(message_data), header=None, names=column_names)
         if df.iloc[0]['transaction_id'] == 'transaction_id':
             df = pd.read_csv(io.StringIO(message_data))
-        print(f"Parsed {message_data} to dataframe.")
         return df
     except Exception as e:
-        print(f"Failed to parse {message_data} to dataframe: {e}")
+        print(f"Failed to parse message to dataframe: {e}")
         raise
 
+
 def preprocessing_and_predict(data_df):
-    print("Preprocessing and predicting...")
 
     load_model_if_needed()
 
-    transaction_id = data_df['transaction_id']
-    data_df.drop(columns=['transaction_id', 'Class'], inplace=True)
-    time = data_df['Time']
-    amount = data_df['Amount']
+    transaction_id = data_df['transaction_id'].copy()
+    time = data_df['Time'].copy()
+    amount = data_df['Amount'].copy()
+
+    data_df = data_df.drop(columns=['transaction_id', 'Class'])
     data_df['Time'] = scaler_time.transform(data_df[['Time']].values)
     data_df['Amount'] = scaler_amount.transform(data_df[['Amount']].values)
-    print("Finished preprocessing.")
+
+
 
     prediction = model.predict(data_df).astype(int)
     prediction_proba = model.predict_proba(data_df)[:, 1]
@@ -116,16 +124,13 @@ def preprocessing_and_predict(data_df):
         'transaction_id': transaction_id.values,
         'prediction': prediction,
         'prediction_proba': prediction_proba,
-        'time' : time.values,
-        'amount' : amount.values
+        'time': time.values,
+        'amount': amount.values
     })
-    print("Finished predicting")
     return result_df
 
 
 def publish_message(result_df):
-    print("Publishing message...")
-
     topic_path = publisher.topic_path(PROJECT_ID, TOPIC_ID)
 
     for row in result_df.itertuples(index=False):
@@ -140,55 +145,63 @@ def publish_message(result_df):
         try:
             future = publisher.publish(topic_path, data_bytes)
             message_id = future.result()
-            print("Message containing data of transaction with ID {} published to topic {}".format(
-                message_data['id'], topic_path))
+            print(f"Published transaction {message_data['id']} (prediction={message_data['failure']})")
         except Exception as e:
-            print("Failed to publish message containing data of transaction with ID {}: {}".format(
-                message_data['id'], e))
-    print("Finished publishing message.")
-
+            print(f"Failed to publish transaction {message_data['id']}: {e}")
 
 def process_message(message_data):
     try:
-        print(f"Processing message: {message_data}")
         data_df = parse_message_to_dataframe(message_data)
         result_df = preprocessing_and_predict(data_df)
-
         publish_message(result_df)
-
-        print(f"Successfully processed message: {message_data}")
+        return True
 
     except Exception as e:
-        print(f"Error processing message {message_data}: {e}")
+        print(f"Error processing message: {e}")
+        return False
 
 
 def callback(message):
     try:
         message_data = message.data.decode('utf-8')
-        print(f"Received message: {message_data}")
+        print(f"Received message (ID: {message.message_id[:8]}...)")
+
+        future = executor.submit(process_message, message_data)
 
         message.ack()
-        print(f"Message acknowledged")
+        print(f"Message {message.message_id[:8]}... acknowledged")
 
-        executor.submit(process_message, message_data)
+        def log_result(fut):
+            try:
+                success = fut.result()
+                if not success:
+                    print(f"Message {message.message_id[:8]}... processing failed")
+            except Exception as e:
+                print(f"Message {message.message_id[:8]}... processing exception: {e}")
+
+        future.add_done_callback(log_result)
 
     except Exception as e:
         print(f"Error in callback: {e}")
         message.nack()
 
+
 def main():
+    print(f"Starting inference service with MAX_WORKERS={MAX_WORKERS}, MAX_MESSAGES={MAX_MESSAGES}")
+
     fetch_and_download_latest_model()
 
     try:
         load_model_if_needed()
+        print("Model pre-loaded successfully")
     except Exception as e:
         print(f"Warning: Could not pre-load model: {e}")
 
     subscription_path = subscriber.subscription_path(PROJECT_ID, SUBSCRIPTION_ID)
 
     flow_control = pubsub_v1.types.FlowControl(
-        max_messages=5,
-        max_bytes=10 * 1024 * 1024,
+        max_messages=MAX_MESSAGES,
+        max_bytes=50 * 1024 * 1024,
     )
 
     streaming_pull_future = subscriber.subscribe(
@@ -197,14 +210,14 @@ def main():
         flow_control=flow_control
     )
 
-    print("Listening for messages on subscription {}...".format(subscription_path))
+    print(f"Listening for messages on {subscription_path}...")
 
     try:
         streaming_pull_future.result()
     except KeyboardInterrupt:
         streaming_pull_future.cancel()
         executor.shutdown(wait=True)
-        print("Stopped listening for messages on subscription {}".format(subscription_path))
+        print(f"Stopped listening for messages on {subscription_path}")
     except Exception as e:
         streaming_pull_future.cancel()
         executor.shutdown(wait=True)
