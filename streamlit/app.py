@@ -23,6 +23,7 @@ DATASET_ID = os.getenv("DATASET_ID")
 PREDICTION_TABLE = f"{PROJECT_ID}.{DATASET_ID}.prediction_data"
 INPUT_TABLE = f"{PROJECT_ID}.{DATASET_ID}.data_input_test"
 RAW_TABLE = f"{PROJECT_ID}.{DATASET_ID}.raw-data"
+HISTORY_TABLE = f"{PROJECT_ID}.{DATASET_ID}.history_db"
 
 @st.cache_resource
 def get_bigquery_client():
@@ -88,8 +89,9 @@ def get_pending_frauds():
     return client.query(query).to_dataframe()
 
 
-def update_prediction(transaction_id, new_result, set_checked=True):
+def update_prediction_and_history(transaction_id, new_result, set_checked=True):
     """Update prediction_result and checked status"""
+
     query = f"""
     UPDATE `{PREDICTION_TABLE}`
     SET prediction_result = @new_result,
@@ -104,6 +106,53 @@ def update_prediction(transaction_id, new_result, set_checked=True):
         ]
     )
     client.query(query, job_config=job_config).result()
+
+    query = f"""
+    UPDATE `{HISTORY_TABLE}`
+    SET actual_result = @new_result
+    WHERE transaction_id = @transaction_id
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("transaction_id", "STRING", str(transaction_id)),
+            bigquery.ScalarQueryParameter("new_result", "INT64", new_result)
+        ]
+    )
+    client.query(query, job_config=job_config).result()
+
+
+
+def update_raw_and_history(transaction_id, new_result):
+    """Update class in raw_data + actual_result in history_db"""
+    
+    # Update raw_data
+    query = f"""
+    UPDATE `{RAW_TABLE}`
+    SET Class = @new_result
+    WHERE transaction_id = @transaction_id
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("transaction_id", "STRING", str(transaction_id)),
+            bigquery.ScalarQueryParameter("new_result", "INT64", new_result)
+        ]
+    )
+    client.query(query, job_config=job_config).result()
+    
+    # Update history_db
+    query = f"""
+    UPDATE `{HISTORY_TABLE}`
+    SET actual_result = @new_result
+    WHERE transaction_id = @transaction_id
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("transaction_id", "STRING", str(transaction_id)),
+            bigquery.ScalarQueryParameter("new_result", "INT64", new_result)
+        ]
+    )
+    client.query(query, job_config=job_config).result()
+
 
 
 def search_transaction_in_prediction(transaction_id):
@@ -146,9 +195,9 @@ def search_transaction_in_raw(transaction_id):
 
 # ==================== MAIN APP ====================
 
-st.title("🔍 Fraud Detection Admin Interface")
+st.title("Fraud Detection Admin Interface")
 
-tab1, tab2 = st.tabs(["🚨 Fraud Alert & Review", "🔍 Transaction Search"])
+tab1, tab2, tab3 = st.tabs(["Fraud Alert & Review", "Transaction Search", "Dashboard"])
 
 # ==================== TAB 1: FRAUD ALERT ====================
 with tab1:
@@ -220,7 +269,7 @@ with tab1:
                 with col_btn1:
                     if st.button("Confirm FRAUD", type="primary", width='stretch'):
                         try:
-                            update_prediction(transaction_id, 1, True)  # Keep result=1, set checked=True
+                            update_prediction_and_history(transaction_id, 1, True)  # Keep result=1, set checked=True
                             st.success(f"Transaction `{transaction_id}` confirmed as FRAUD")
                             st.cache_data.clear()
                             st.rerun()
@@ -230,7 +279,7 @@ with tab1:
                 with col_btn2:
                     if st.button("NOT Fraud", type="secondary", width='stretch'):
                         try:
-                            update_prediction(transaction_id, 0, True)  # Change result=0, set checked=True
+                            update_prediction_and_history(transaction_id, 0, True)  # Change result=0, set checked=True
                             st.success(f"Transaction `{transaction_id}` marked as NOT FRAUD")
                             st.cache_data.clear()
                             st.rerun()
@@ -246,7 +295,7 @@ with tab2:
     st.markdown("Search for any transaction and view its current status")
     
     # Search input
-    search_id = st.text_input("🔍 Enter Transaction ID:", key="search_input")
+    search_id = st.text_input("Enter Transaction ID:", key="search_input")
     
     if st.button("Search", type="primary", key="search_btn") or search_id:
         if search_id:
@@ -275,7 +324,7 @@ with tab2:
                     
                     # Show transaction details
                     st.markdown("### Transaction Data")
-                    feature_cols = [col for col in df_active.columns if col not in ['prediction_result', 'checked']]
+                    feature_cols = [col for col in df_active.columns if col not in ['prediction_result', 'checked', 'Class']]
                     st.dataframe(df_active[feature_cols], width='stretch', hide_index=True)
                     
                     # Allow update
@@ -286,7 +335,7 @@ with tab2:
                     if row['prediction_result'] == 0:
                         if st.button("Mark as FRAUD", type="primary", width='stretch', key="mark_fraud"):
                             try:
-                                update_prediction(search_id, 1, True)
+                                update_prediction_and_history(search_id, 1, True)
                                 st.success(f"Updated `{search_id}` to FRAUD")
                                 st.rerun()
                             except Exception as e:
@@ -307,7 +356,7 @@ with tab2:
                         """, unsafe_allow_html=True)
                         if st.button("Mark as NOT FRAUD", type="secondary", width='stretch', key="mark_not_fraud",):
                             try:
-                                update_prediction(search_id, 0, True)
+                                update_prediction_and_history(search_id, 0, True)
                                 st.success(f"Updated `{search_id}` to NOT FRAUD")
                                 st.rerun()
                             except Exception as e:
@@ -325,7 +374,7 @@ with tab2:
                         # Display status
                         col1, col2 = st.columns(2)
                         with col1:
-                            class_label = "FRAUD (1)" if row.get('class', 0) == 1 else "NOT FRAUD (0)"
+                            class_label = "FRAUD (1)" if row.get('Class', 0) == 1 else "NOT FRAUD (0)"
                             st.metric("Final Class", class_label)
                         with col2:
                             st.metric("Location", "Raw Data (Finalized)")
@@ -334,9 +383,47 @@ with tab2:
                         
                         # Show transaction details
                         st.markdown("### Transaction Data")
-                        st.dataframe(df_raw, width='stretch')
+                        feature_cols = [col for col in df_raw.columns if col not in ['prediction_result', 'checked', 'Class']]
+                        st.dataframe(df_raw[feature_cols], width='stretch', hide_index=True)
+                        # st.dataframe(df_raw, width='stretch')
                         
-                        st.info("This transaction has been finalized and cannot be modified")
+                        # st.info("This transaction has been finalized and cannot be modified")
+
+                         # Allow update in raw_data
+                        st.divider()
+                        st.markdown("### Update Finalized Data")
+                        st.warning("This will update the finalized data in raw_data and history_db")
+                        
+                        if row.get('Class', 0) == 0:
+                            if st.button("Mark as FRAUD", type="primary", width='stretch', key="mark_fraud_raw"):
+                                try:
+                                    update_raw_and_history(search_id, 1)
+                                    st.success(f"Updated `{search_id}` to FRAUD in raw_data")
+                                    st.cache_data.clear()
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                        else:
+                            st.markdown("""
+                                <style>
+                                div.stButton > button[kind="secondary"] {
+                                    background-color: #0ea5e9 !important;
+                                    color: white !important;
+                                    border: none !important;
+                                }
+                                div.stButton > button[kind="secondary"]:hover {
+                                    background-color: #0284c7 !important;
+                                }
+                                </style>
+                            """, unsafe_allow_html=True)
+                            if st.button("Mark as NOT FRAUD", type="secondary", width='stretch', key="mark_not_fraud_raw"):
+                                try:
+                                    update_raw_and_history(search_id, 0)
+                                    st.success(f"Updated `{search_id}` to NOT FRAUD in raw_data")
+                                    st.cache_data.clear()
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
                     
                     else:
                         st.warning(f"Transaction `{search_id}` not found in any table")
@@ -345,3 +432,13 @@ with tab2:
                 st.error(f"Error searching: {e}")
         else:
             st.info("👆 Enter a transaction ID to search")
+
+with tab3:
+    
+    looker_url = "https://lookerstudio.google.com/embed/reporting/3633feef-9528-42d1-b87c-c39a976ec509/page/4vFfF"
+    
+    st.components.v1.iframe(
+        src=looker_url,
+        height=800,
+        scrolling=True
+    )
