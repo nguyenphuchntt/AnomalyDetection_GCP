@@ -197,7 +197,7 @@ def search_transaction_in_raw(transaction_id):
 
 st.title("Fraud Detection Admin Interface")
 
-tab1, tab2 = st.tabs(["Fraud Alert & Review", "Transaction Search"])
+tab1, tab2, tab3 = st.tabs(["Fraud Alert & Review", "Transaction Search", "Dashboard"])
 
 # ==================== TAB 1: FRAUD ALERT ====================
 with tab1:
@@ -383,7 +383,7 @@ with tab2:
                         
                         # Show transaction details
                         st.markdown("### Transaction Data")
-                        feature_cols = [col for col in df_active.columns if col not in ['prediction_result', 'checked', 'Class']]
+                        feature_cols = [col for col in df_raw.columns if col not in ['prediction_result', 'checked', 'Class']]
                         st.dataframe(df_raw[feature_cols], width='stretch', hide_index=True)
                         # st.dataframe(df_raw, width='stretch')
                         
@@ -432,3 +432,13 @@ with tab2:
                 st.error(f"Error searching: {e}")
         else:
             st.info("👆 Enter a transaction ID to search")
+
+with tab3:
+    
+    looker_url = "https://lookerstudio.google.com/embed/reporting/3633feef-9528-42d1-b87c-c39a976ec509/page/4vFfF"
+    
+    st.components.v1.iframe(
+        src=looker_url,
+        height=800,
+        scrolling=True
+    )
