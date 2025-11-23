@@ -59,7 +59,6 @@ def main_handler(cloud_event):
             ON T.transaction_id = S.transaction_id
             
             WHEN MATCHED THEN
-                -- Nếu ID đã tồn tại, CẬP NHẬT các trường
                 UPDATE SET
                     prediction_score = S.prediction_score,
                     prediction_result = S.prediction_result,
@@ -69,7 +68,6 @@ def main_handler(cloud_event):
                     timestamp_processed = S.timestamp_processed -- Cập nhật timestamp
                     
             WHEN NOT MATCHED THEN
-                -- Nếu ID chưa tồn tại, CHÈN bản ghi mới
                 INSERT (transaction_id, prediction_score, prediction_result, actual_result, amount, time, timestamp_processed)
                 VALUES (S.transaction_id, S.prediction_score, S.prediction_result, S.actual_result, S.amount, S.time, S.timestamp_processed)
         """
