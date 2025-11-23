@@ -10,7 +10,7 @@ spec:
     name: inference
 
   minReplicas: 2
-  maxReplicas: 8
+  maxReplicas: 5
 
   metrics:
   - type: External
@@ -19,7 +19,7 @@ spec:
         name: pubsub.googleapis.com|subscription|num_undelivered_messages
         selector:
           matchLabels:
-            resource.label.subscription_id: "inference_sub"
+            resource.labels.subscription_id: "inference_sub"
       target:
         type: AverageValue
         averageValue: 60

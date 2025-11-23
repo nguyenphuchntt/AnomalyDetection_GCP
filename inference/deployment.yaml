@@ -11,7 +11,7 @@ spec:
     metadata:
       labels:
         app: inference
-    spec:
+    spec:        
       containers:
       - name: inference
         image:  gcr.io/int3319-477808/inference:v3
@@ -23,13 +23,12 @@ spec:
             value: "inference_sub"
         resources:
           requests:
-            cpu: 1000m
-            memory: "1Gi"
+            cpu: 300m
+            memory: "512Mi"
           limits:
-            cpu: 1000m
+            cpu: 700m
             memory: "1Gi"
       serviceAccountName: inference-pod-sa
-      nodeSelector:
-        cloud.google.com/compute-class: 'Performance'
+      
 
 
