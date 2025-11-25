@@ -15,7 +15,7 @@ Hệ thống được xây dựng để giải quyết bài toán phát hiện g
 2. **Huấn luyện và Triển khai mô hình (Model Training & Deployment)**
 3. **Trực quan hóa và Gửi cảnh báo (Visualising and Sending Alerts)**
 
-
+![](./images/flow-mlops.png)
 
 ### Pha 1: Xử lý dữ liệu
 Giai đoạn này chịu trách nhiệm thu thập, làm sạch và chuẩn hóa dữ liệu luồng trước khi lưu trữ.
